@@ -14,6 +14,7 @@
 import type { Dashboard } from '@/types'
 import type { ServiceManager } from './service-manager'
 import type { ICache } from './cache'
+import { getLogger } from '@/lib/logger/logger'
 
 /**
  * Dashboard builder configuration
@@ -59,6 +60,7 @@ export class DashboardBuilder {
   private cacheTtl: number = 300 // 5 minutes default
   private serviceTimeout: number = 5000 // 5 seconds default
   private includeMetadata: boolean = false
+  private logger = getLogger('DashboardBuilder')
 
   constructor(
     serviceManager: ServiceManager,
@@ -82,6 +84,8 @@ export class DashboardBuilder {
   /**
    * Build complete dashboard for a user
    *
+   * Sprint 5+: Integrates with actual services
+   *
    * @param userId - User ID
    * @returns Dashboard build result
    */
@@ -93,25 +97,35 @@ export class DashboardBuilder {
     if (this.cache?.has(cacheKey)) {
       const cached = this.cache.get<DashboardBuildResult>(cacheKey)
       if (cached) {
+        this.logger.debug('Dashboard cache hit', { userId })
         return cached
       }
     }
 
+    this.logger.debug('Building dashboard from services', { userId })
+
     const serviceResults = new Map<string, unknown>()
     const errors = new Map<string, Error>()
 
-    // Sprint 4: Return empty dashboard structure
-    // Sprint 5+: Call services like this:
-    // for (const service of this.serviceManager.getEnabledServices()) {
-    //   try {
-    //     const result = await this.executeServiceWithTimeout(service)
-    //     serviceResults.set(service.id, result)
-    //   } catch (error) {
-    //     errors.set(service.id, error instanceof Error ? error : new Error(String(error)))
-    //   }
-    // }
+    // Execute all enabled services in parallel
+    const enabledServices = this.serviceManager.getEnabledServices()
 
-    // Build empty dashboard structure
+    for (const service of enabledServices) {
+      try {
+        this.logger.debug('Executing service', { serviceId: service.id })
+        const result = await this.executeServiceWithTimeout(service)
+        serviceResults.set(service.id, result)
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error))
+        errors.set(service.id, err)
+        this.logger.warning('Service execution failed', {
+          serviceId: service.id,
+          error: err.message,
+        })
+      }
+    }
+
+    // Build dashboard structure
     const dashboard = this.buildEmptyDashboard(userId)
 
     const buildTime = Date.now() - startTime
@@ -121,6 +135,13 @@ export class DashboardBuilder {
       errors,
       buildTime,
     }
+
+    this.logger.info('Dashboard built successfully', {
+      userId,
+      buildTime,
+      serviceCount: enabledServices.length,
+      errorCount: errors.size,
+    })
 
     // Cache the result
     if (this.cache) {
