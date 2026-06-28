@@ -7,10 +7,11 @@
 
 import { BaseService } from '../base-service'
 import type { ServiceExecutionResult } from '../base-service'
-import { getLogger } from '../../logger/logger'
+import { getLogger } from '@/lib/logger/logger'
 import type { IAircraftProvider } from './provider'
 import { createStubProvider } from './provider'
-import type { AircraftData, AircraftServiceState } from './types'
+import { createOpenSkyProvider } from './opensky'
+import type { AircraftData, AircraftServiceState, AircraftQueryOptions } from './types'
 
 /**
  * Aircraft Service
@@ -34,7 +35,14 @@ export class AircraftService extends BaseService {
 
   constructor(provider?: IAircraftProvider) {
     super()
-    this.provider = provider || createStubProvider()
+    // Use OpenSky by default, fall back to stub if not configured
+    if (provider) {
+      this.provider = provider
+    } else if (process.env.OPENSKY_USERNAME && process.env.OPENSKY_PASSWORD) {
+      this.provider = createOpenSkyProvider()
+    } else {
+      this.provider = createStubProvider()
+    }
     this.logger.info('Aircraft service created', { provider: this.provider.name })
   }
 
@@ -64,9 +72,7 @@ export class AircraftService extends BaseService {
       this.executionCount++
 
       // Fetch data from provider
-      const response = await this.provider.fetchAircraft({
-        limit: 1000,
-      })
+      const response = await this.provider.fetchAircraft()
 
       this.aircraftData = response.aircraft
       this.lastUpdate = new Date().toISOString()
@@ -180,5 +186,6 @@ export function createAircraftService(provider?: IAircraftProvider): AircraftSer
 }
 
 // Re-export types and interfaces
-export type { IAircraftProvider, AircraftData, AircraftServiceState }
+export type { IAircraftProvider, AircraftData, AircraftServiceState, AircraftQueryOptions }
 export { StubAircraftProvider, createStubProvider } from './provider'
+export { OpenSkyProvider, createOpenSkyProvider } from './opensky'
