@@ -65,27 +65,30 @@ export interface ConfigValidationResult {
 /**
  * Validate OpenSky credentials required for production runtime
  */
-export function validateOpenSkyConfig(): ConfigValidationResult {
+export function validateOpenSkyConfig(
+  strict = true
+): ConfigValidationResult {
   const errors: string[] = []
   const missingEnvVars: string[] = []
 
   if (!appConfig.opensky.username) {
-    missingEnvVars.push('OPENSKY_USERNAME')
-    errors.push(
-      'Missing OPENSKY_USERNAME — set your OpenSky API client ID in environment variables'
-    )
+    missingEnvVars.push("OPENSKY_USERNAME")
+
+    if (strict) {
+      errors.push(
+        "Missing OPENSKY_USERNAME — set your OpenSky API client ID in environment variables"
+      )
+    }
   }
 
   if (!appConfig.opensky.password) {
-    missingEnvVars.push('OPENSKY_PASSWORD')
-    errors.push(
-      'Missing OPENSKY_PASSWORD — set your OpenSky API client secret in environment variables'
-    )
-  }
+    missingEnvVars.push("OPENSKY_PASSWORD")
 
-  if (!appConfig.opensky.apiUrl) {
-    missingEnvVars.push('OPENSKY_API_URL')
-    errors.push('Missing OPENSKY_API_URL — OpenSky API base URL is required')
+    if (strict) {
+      errors.push(
+        "Missing OPENSKY_PASSWORD — set your OpenSky API client secret in environment variables"
+      )
+    }
   }
 
   return {
