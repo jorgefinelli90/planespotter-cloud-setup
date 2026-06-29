@@ -32,4 +32,26 @@ export {
 
 // Dashboard builder
 export { DashboardBuilder, createDashboardBuilder } from './dashboard-builder'
-export type { DashboardBuilderConfig, DashboardBuildResult } from './dashboard-builder'
+export type {
+  DashboardBuilderConfig,
+  DashboardBuildResult,
+  DashboardApiData,
+} from './dashboard-builder'
+
+// Bootstrap
+export { ensureAppInitialized, getAppRuntime, resetAppRuntime } from './bootstrap'
+export type { AppRuntime } from './bootstrap'
+
+// Scheduler implementation
+export {
+  IntervalScheduler,
+  createIntervalScheduler,
+} from './interval-scheduler'
+export type { ServiceExecutionHandler } from './interval-scheduler'
+
+// Aircraft updater
+export { runAircraftUpdate, getSystemStatusFromCache } from './aircraft-updater'
+
+// Cache keys and types
+export { CACHE_KEYS } from './cache-keys'
+export type { AircraftCachePayload, SystemStatusInfo } from './cache-types'

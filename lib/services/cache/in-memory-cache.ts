@@ -1,259 +1,234 @@
 /**
  * In-Memory Cache Implementation
  *
- * Provides a simple, fast in-memory cache with TTL support.
- * Designed for storing frequently accessed data like aircraft states.
+ * Simple in-memory cache with TTL support implementing ICache.
  * No external dependencies - pure TypeScript.
  */
 
 import { getLogger } from '@/lib/logger/logger'
 import { appConfig } from '@/lib/config/app-config'
+import {
+  BaseCache,
+  type CacheEntry,
+  type CacheOptions,
+  type ICache,
+} from '../cache'
 
-export interface CacheEntry<T> {
-  value: T
-  timestamp: number
-  ttl: number
-}
-
-export interface CacheStats {
-  size: number
+interface StoredEntry {
+  value: unknown
+  createdAt: number
+  expiresAt: number
   hits: number
-  misses: number
-  lastCleanup: number
+  lastAccessed: number
 }
 
 /**
- * Simple in-memory cache with TTL support
+ * In-memory cache with TTL, stats, and manual invalidation
  */
-export class InMemoryCache {
+export class InMemoryCacheImpl extends BaseCache implements ICache {
   private logger = getLogger('InMemoryCache')
-  private storage: Map<string, CacheEntry<any>> = new Map()
-  private stats: CacheStats = {
-    size: 0,
-    hits: 0,
-    misses: 0,
-    lastCleanup: Date.now(),
-  }
-  private cleanupInterval: NodeJS.Timeout | null = null
+  private storage: Map<string, StoredEntry> = new Map()
+  private cleanupTimer: NodeJS.Timeout | null = null
 
-  constructor() {
-    this.logger.info('InMemoryCache initialized')
-    // Start cleanup interval to remove expired entries
-    this.startCleanupInterval()
-  }
+  constructor(options?: CacheOptions) {
+    const ttlSeconds = Math.ceil(
+      (options?.defaultTtl ?? appConfig.cache.ttl) / 1000
+    )
 
-  /**
-   * Store a value in cache with TTL
-   */
-  set<T>(key: string, value: T, ttl?: number): void {
-    const cacheTtl = ttl || appConfig.cache.ttl
-
-    this.storage.set(key, {
-      value,
-      timestamp: Date.now(),
-      ttl: cacheTtl,
+    super({
+      defaultTtl: ttlSeconds,
+      maxEntries: options?.maxEntries ?? appConfig.cache.maxEntries,
+      autoCleanup: options?.autoCleanup ?? true,
+      cleanupInterval: options?.cleanupInterval ?? 60,
     })
 
-    this.stats.size = this.storage.size
-
-    this.logger.debug('Cache set', {
-      key,
-      ttl: cacheTtl,
-      size: this.stats.size,
+    this.logger.info('InMemoryCache initialized', {
+      defaultTtlSeconds: this.defaultTtl,
+      maxEntries: this.maxEntries,
     })
   }
 
-  /**
-   * Retrieve a value from cache
-   */
-  get<T>(key: string): T | null {
-    const entry = this.storage.get(key)
-
+  get<T = unknown>(key: string): T | undefined {
+    const entry = this.getStoredEntry(key)
     if (!entry) {
-      this.stats.misses++
-      this.logger.debug('Cache miss', { key })
-      return null
+      this.recordMiss()
+      return undefined
     }
 
-    // Check if entry has expired
-    const age = Date.now() - entry.timestamp
-    if (age > entry.ttl) {
-      this.storage.delete(key)
-      this.stats.size = this.storage.size
-      this.stats.misses++
-      this.logger.debug('Cache expired', { key, age, ttl: entry.ttl })
-      return null
-    }
-
-    this.stats.hits++
-    this.logger.debug('Cache hit', { key, age })
+    entry.hits++
+    entry.lastAccessed = Date.now()
+    this.recordHit()
     return entry.value as T
   }
 
-  /**
-   * Check if key exists and is not expired
-   */
+  set<T = unknown>(key: string, value: T, ttlSeconds?: number): void {
+    const ttl = ttlSeconds ?? this.defaultTtl
+    const now = Date.now()
+    const expiresAt = ttl > 0 ? now + ttl * 1000 : Number.MAX_SAFE_INTEGER
+
+    if (this.storage.size >= this.maxEntries && !this.storage.has(key)) {
+      this.evictOldest()
+    }
+
+    this.storage.set(key, {
+      value,
+      createdAt: now,
+      expiresAt,
+      hits: 0,
+      lastAccessed: now,
+    })
+
+    this.stats.entries = this.storage.size
+    this.logger.debug('Cache set', { key, ttlSeconds: ttl })
+  }
+
+  delete(key: string): void {
+    if (this.storage.delete(key)) {
+      this.stats.entries = this.storage.size
+      this.logger.debug('Cache invalidated', { key })
+    }
+  }
+
   has(key: string): boolean {
-    return this.get(key) !== null
+    return this.getStoredEntry(key) !== undefined
   }
 
-  /**
-   * Get entry with metadata (timestamp, age, etc)
-   */
-  getWithMetadata<T>(
-    key: string
-  ): { value: T; timestamp: number; age: number } | null {
-    const entry = this.storage.get(key)
-
-    if (!entry) {
-      return null
-    }
-
-    const age = Date.now() - entry.timestamp
-    if (age > entry.ttl) {
-      this.storage.delete(key)
-      return null
-    }
-
-    return {
-      value: entry.value as T,
-      timestamp: entry.timestamp,
-      age,
-    }
-  }
-
-  /**
-   * Delete a key from cache
-   */
-  delete(key: string): boolean {
-    const deleted = this.storage.delete(key)
-    if (deleted) {
-      this.stats.size = this.storage.size
-      this.logger.debug('Cache deleted', { key })
-    }
-    return deleted
-  }
-
-  /**
-   * Clear all entries from cache
-   */
   clear(): void {
-    const size = this.storage.size
+    const count = this.storage.size
     this.storage.clear()
-    this.stats.size = 0
-    this.logger.info('Cache cleared', { entriesCleared: size })
+    this.stats.entries = 0
+    this.logger.info('Cache cleared', { entriesCleared: count })
   }
 
-  /**
-   * Get cache statistics
-   */
-  getStats(): CacheStats {
-    return { ...this.stats }
-  }
-
-  /**
-   * Get cache size
-   */
   size(): number {
     return this.storage.size
   }
 
-  /**
-   * Get all keys in cache
-   */
-  keys(): string[] {
-    return Array.from(this.storage.keys())
-  }
-
-  /**
-   * Remove expired entries from cache
-   */
-  private cleanup(): void {
+  cleanup(): void {
     const now = Date.now()
-    let removedCount = 0
+    let removed = 0
 
     for (const [key, entry] of this.storage.entries()) {
-      const age = now - entry.timestamp
-      if (age > entry.ttl) {
+      if (entry.expiresAt <= now) {
         this.storage.delete(key)
-        removedCount++
+        removed++
+        this.recordEviction()
       }
     }
 
-    if (removedCount > 0) {
-      this.stats.size = this.storage.size
-      this.stats.lastCleanup = now
-      this.logger.debug('Cache cleanup performed', { removedCount })
+    if (removed > 0) {
+      this.stats.entries = this.storage.size
+      this.logger.debug('Cache cleanup performed', { removed })
     }
   }
 
-  /**
-   * Start automatic cleanup interval
-   */
-  private startCleanupInterval(): void {
-    // Run cleanup every minute
-    this.cleanupInterval = setInterval(() => {
-      this.cleanup()
-    }, 60000)
-
-    // Don't prevent process from exiting
-    if (this.cleanupInterval.unref) {
-      this.cleanupInterval.unref()
+  getEntry<T = unknown>(key: string): CacheEntry<T> | undefined {
+    const entry = this.getStoredEntry(key)
+    if (!entry) {
+      return undefined
     }
 
-    this.logger.debug('Cache cleanup interval started (60s)')
-  }
-
-  /**
-   * Stop cleanup interval
-   */
-  stop(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval)
-      this.cleanupInterval = null
-      this.logger.debug('Cache cleanup interval stopped')
-    }
-  }
-
-  /**
-   * Get cache info for debugging
-   */
-  getInfo(): {
-    size: number
-    keys: string[]
-    stats: CacheStats
-    nextCleanup: string
-  } {
     return {
-      size: this.stats.size,
-      keys: this.keys(),
-      stats: this.getStats(),
-      nextCleanup: new Date(this.stats.lastCleanup + 60000).toISOString(),
+      value: entry.value as T,
+      metadata: {
+        createdAt: new Date(entry.createdAt).toISOString(),
+        expiresAt: new Date(entry.expiresAt).toISOString(),
+        hits: entry.hits,
+        lastAccessed: new Date(entry.lastAccessed).toISOString(),
+      },
+    }
+  }
+
+  /**
+   * Get age of a cache entry in milliseconds
+   */
+  getAgeMs(key: string): number | null {
+    const entry = this.storage.get(key)
+    if (!entry || this.isExpired(entry)) {
+      return null
+    }
+    return Date.now() - entry.createdAt
+  }
+
+  /**
+   * Get remaining TTL in milliseconds
+   */
+  getRemainingTtlMs(key: string): number | null {
+    const entry = this.storage.get(key)
+    if (!entry || this.isExpired(entry)) {
+      return null
+    }
+    return Math.max(0, entry.expiresAt - Date.now())
+  }
+
+  /**
+   * Get last update timestamp for a key
+   */
+  getLastUpdated(key: string): string | null {
+    const entry = this.storage.get(key)
+    if (!entry || this.isExpired(entry)) {
+      return null
+    }
+    return new Date(entry.createdAt).toISOString()
+  }
+
+  shutdown(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer)
+      this.cleanupTimer = null
+    }
+  }
+
+  private getStoredEntry(key: string): StoredEntry | undefined {
+    const entry = this.storage.get(key)
+    if (!entry) {
+      return undefined
+    }
+
+    if (this.isExpired(entry)) {
+      this.storage.delete(key)
+      this.stats.entries = this.storage.size
+      this.recordMiss()
+      return undefined
+    }
+
+    return entry
+  }
+
+  private isExpired(entry: StoredEntry): boolean {
+    return entry.expiresAt <= Date.now()
+  }
+
+  private evictOldest(): void {
+    let oldestKey: string | null = null
+    let oldestAccess = Infinity
+
+    for (const [key, entry] of this.storage.entries()) {
+      if (entry.lastAccessed < oldestAccess) {
+        oldestAccess = entry.lastAccessed
+        oldestKey = key
+      }
+    }
+
+    if (oldestKey) {
+      this.storage.delete(oldestKey)
+      this.recordEviction()
     }
   }
 }
 
-/**
- * Global cache instance (singleton)
- */
-let cacheInstance: InMemoryCache | null = null
+let cacheInstance: InMemoryCacheImpl | null = null
 
-/**
- * Get or create the global cache instance
- */
-export function getCache(): InMemoryCache {
+export function getCacheInstance(): InMemoryCacheImpl {
   if (!cacheInstance) {
-    cacheInstance = new InMemoryCache()
+    cacheInstance = new InMemoryCacheImpl()
   }
   return cacheInstance
 }
 
-/**
- * Reset cache instance (for testing)
- */
-export function resetCache(): void {
+export function resetCacheInstance(): void {
   if (cacheInstance) {
-    cacheInstance.stop()
+    cacheInstance.shutdown()
     cacheInstance = null
   }
 }

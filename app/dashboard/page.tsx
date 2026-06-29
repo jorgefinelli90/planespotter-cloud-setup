@@ -3,6 +3,7 @@
 import { useDashboardData } from '@/hooks/use-dashboard-data'
 import { StatusCard } from '@/components/dashboard/status-card'
 import { ServiceCard } from '@/components/dashboard/service-card'
+import { SystemStatusCard } from '@/components/dashboard/system-status-card'
 import { AircraftTable } from '@/components/dashboard/aircraft-table'
 import { AlertPanel, type Alert } from '@/components/dashboard/alert-panel'
 import { RefreshButton } from '@/components/dashboard/refresh-button'
@@ -17,7 +18,6 @@ export default function DashboardPage() {
 
   const [alerts, setAlerts] = useState<Alert[]>([])
 
-  // Generate alerts based on data state
   useEffect(() => {
     const newAlerts: Alert[] = []
 
@@ -30,21 +30,25 @@ export default function DashboardPage() {
       })
     }
 
+    if (data?.alerts) {
+      for (const alert of data.alerts) {
+        newAlerts.push({
+          id: alert.id,
+          type: alert.type,
+          title: alert.title,
+          message: alert.message,
+        })
+      }
+    }
+
     if (data?.services?.aircraft?.status === 'degraded') {
       newAlerts.push({
         id: 'service-degraded',
         type: 'warning',
         title: 'Service Degraded',
-        message: data.services.aircraft.error || 'Aircraft service is running with limited capacity',
-      })
-    }
-
-    if (data?.services?.aircraft?.status === 'error') {
-      newAlerts.push({
-        id: 'service-error',
-        type: 'error',
-        title: 'Service Error',
-        message: data.services.aircraft.error || 'Aircraft service encountered an error',
+        message:
+          data.services.aircraft.error ||
+          'Aircraft service is running with cached data after an update failure',
       })
     }
 
@@ -67,12 +71,31 @@ export default function DashboardPage() {
     }
   }
 
-  const aircraftCount = data?.aircraft?.length || 0
+  const formatInterval = (ms: number | undefined) => {
+    if (!ms) return 'N/A'
+    return `${Math.round(ms / 1000)}s`
+  }
+
+  const aircraftCount =
+    data?.systemStatus?.aircraftCountInCache ??
+    data?.services?.aircraft?.aircraftCount ??
+    data?.aircraft?.length ??
+    0
+
+  const providerName =
+    data?.services?.aircraft?.provider ??
+    data?.systemStatus?.provider ??
+    'OpenSky'
+
+  const schedulerStatus =
+    data?.services?.scheduler?.status === 'running' ? 'healthy' : 'degraded'
+
+  const cacheStatus =
+    data?.services?.cache?.status === 'enabled' ? 'healthy' : 'degraded'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-zinc-900 to-zinc-950">
       <div className="container mx-auto max-w-7xl space-y-6 p-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-white">PlaneSpotter Dashboard</h1>
@@ -87,12 +110,8 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Alerts */}
-        {alerts.length > 0 && (
-          <AlertPanel alerts={alerts} />
-        )}
+        {alerts.length > 0 && <AlertPanel alerts={alerts} />}
 
-        {/* Loading State */}
         {isLoading && !data && (
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-12">
             <div className="flex flex-col items-center justify-center space-y-4">
@@ -102,11 +121,13 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Main Content */}
         {data && (
           <>
-            {/* Top Row - Status Cards */}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+              {data.systemStatus && (
+                <SystemStatusCard status={data.systemStatus} />
+              )}
+
               <StatusCard
                 title="Server Status"
                 status={serverStatus}
@@ -125,15 +146,19 @@ export default function DashboardPage() {
 
               <StatusCard
                 title="Aircraft Detection"
-                status="online"
+                status={aircraftCount > 0 ? 'online' : 'degraded'}
                 details={[
                   {
                     label: 'Total Aircraft',
                     value: aircraftCount.toString(),
                   },
                   {
-                    label: 'Data Source',
-                    value: data.services.aircraft.name || 'OpenSky',
+                    label: 'Provider',
+                    value: providerName,
+                  },
+                  {
+                    label: 'Last Update',
+                    value: formatTime(data.services.aircraft.lastUpdate),
                   },
                 ]}
               />
@@ -154,7 +179,6 @@ export default function DashboardPage() {
               />
             </div>
 
-            {/* Services Row */}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <ServiceCard
                 name="Aircraft Service"
@@ -164,35 +188,41 @@ export default function DashboardPage() {
                     | 'degraded'
                     | 'error'
                 }
-                description="Tracks real-time aircraft data"
+                description="Serves cached aircraft data from OpenSky"
                 details={{
+                  provider: providerName,
                   aircraft_count: aircraftCount,
-                  source: data.services.aircraft.name || 'opensky',
+                  last_update: formatTime(data.services.aircraft.lastUpdate),
                 }}
               />
 
               <ServiceCard
                 name="Scheduler"
-                status="healthy"
-                description="Periodic update tasks"
+                status={schedulerStatus}
+                description="Periodic background updates"
                 details={{
-                  update_interval: '30s',
-                  status: 'ready',
+                  update_interval: formatInterval(
+                    data.services.scheduler?.intervalMs
+                  ),
+                  status: data.services.scheduler?.status || 'unknown',
+                  next_run: formatTime(data.services.scheduler?.nextExecution),
                 }}
               />
 
               <ServiceCard
                 name="Cache"
-                status="healthy"
-                description="Response caching layer"
+                status={cacheStatus}
+                description="In-memory response cache"
                 details={{
-                  ttl: '5m',
-                  status: 'enabled',
+                  ttl: formatInterval(data.services.cache?.ttlMs),
+                  entries: data.services.cache?.entries ?? 0,
+                  age: data.systemStatus?.cacheAgeMs
+                    ? `${Math.round(data.systemStatus.cacheAgeMs / 1000)}s`
+                    : 'N/A',
                 }}
               />
             </div>
 
-            {/* Aircraft Table */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div>
@@ -200,7 +230,8 @@ export default function DashboardPage() {
                     Active Aircraft
                   </h2>
                   <p className="mt-1 text-sm text-zinc-400">
-                    Showing {Math.min(25, aircraftCount)} of {aircraftCount} aircraft
+                    Showing {Math.min(25, aircraftCount)} of {aircraftCount}{' '}
+                    aircraft
                   </p>
                 </div>
               </div>
@@ -210,7 +241,6 @@ export default function DashboardPage() {
               />
             </div>
 
-            {/* Footer Info */}
             <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div>
@@ -220,15 +250,16 @@ export default function DashboardPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-zinc-500">Update Frequency</p>
+                  <p className="text-xs text-zinc-500">Scheduler Interval</p>
                   <p className="mt-1 text-sm font-medium text-zinc-200">
-                    Every 30 seconds
+                    Every{' '}
+                    {formatInterval(data.services.scheduler?.intervalMs)}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Data Source</p>
                   <p className="mt-1 text-sm font-medium text-zinc-200">
-                    {data.services.aircraft.name || 'OpenSky Network'}
+                    {providerName}
                   </p>
                 </div>
               </div>
@@ -236,7 +267,6 @@ export default function DashboardPage() {
           </>
         )}
 
-        {/* Empty State */}
         {!isLoading && !data && error && (
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-12">
             <div className="flex flex-col items-center justify-center space-y-4">

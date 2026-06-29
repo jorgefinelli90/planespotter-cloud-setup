@@ -5,11 +5,11 @@ import { PlaneIcon } from 'lucide-react'
 interface Aircraft {
   id: string
   callsign: string | null
-  altitude: number
-  groundSpeed: number
-  track: number
-  latitude: number
-  longitude: number
+  altitude: number | null
+  groundSpeed: number | null
+  track: number | null
+  latitude: number | null
+  longitude: number | null
 }
 
 interface AircraftTableProps {
@@ -92,14 +92,12 @@ export function AircraftTable({
           </thead>
           <tbody>
             {aircraft.slice(0, 25).map((plane) => {
-              const distance = calculateDistance(
-                refLat,
-                refLon,
-                plane.latitude,
-                plane.longitude
-              )
-              const heading = Math.round(plane.track)
-              const speed = Math.round(plane.groundSpeed * 1.94384) // m/s to knots
+              const lat = plane.latitude ?? 0
+              const lon = plane.longitude ?? 0
+              const distance = calculateDistance(refLat, refLon, lat, lon)
+              const heading = Math.round(plane.track ?? 0)
+              const speed = Math.round((plane.groundSpeed ?? 0) * 1.94384)
+              const altitude = plane.altitude ?? 0
 
               return (
                 <tr
@@ -119,7 +117,7 @@ export function AircraftTable({
                     {distance.toFixed(1)} km
                   </td>
                   <td className="px-4 py-3 text-right text-sm text-zinc-300">
-                    {(plane.altitude / 1000).toFixed(2)} km
+                    {(altitude / 1000).toFixed(2)} km
                   </td>
                   <td className="px-4 py-3 text-right text-sm text-zinc-300">
                     {speed} kt

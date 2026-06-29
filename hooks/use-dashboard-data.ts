@@ -6,24 +6,51 @@ export interface Aircraft {
   id: string
   icao24: string
   callsign: string | null
-  latitude: number
-  longitude: number
-  altitude: number
-  groundSpeed: number
-  track: number
-  verticalRate: number
+  latitude: number | null
+  longitude: number | null
+  altitude: number | null
+  groundSpeed: number | null
+  track: number | null
+  trueTrack?: number | null
+  verticalRate: number | null
   onGround: boolean
   squawk: string | null
   timestamp: number
 }
 
 export interface ServiceStatus {
-  status: 'healthy' | 'degraded' | 'error'
-  name: string
+  status: string
+  name?: string
   aircraftCount?: number
-  lastUpdate?: string
+  lastUpdate?: string | null
   enabled?: boolean
   error?: string
+  intervalMs?: number
+  lastExecution?: string | null
+  nextExecution?: string | null
+  ttlMs?: number
+  entries?: number
+  cacheAgeMs?: number | null
+}
+
+export interface SystemStatus {
+  lastUpdate: string | null
+  cacheAgeMs: number | null
+  cacheTtlMs: number
+  nextUpdate: string | null
+  aircraftCountInCache: number
+  schedulerRunning: boolean
+  schedulerIntervalMs: number
+  lastUpdateError: string | null
+  provider: string
+  lastSyncDurationMs: number | null
+}
+
+export interface DashboardAlert {
+  id: string
+  type: 'warning' | 'error'
+  title: string
+  message: string
 }
 
 export interface DashboardData {
@@ -67,8 +94,12 @@ export interface DashboardData {
     updatedAt: string
   }
   services: {
-    aircraft: ServiceStatus
+    aircraft: ServiceStatus & { provider?: string }
+    scheduler?: ServiceStatus
+    cache?: ServiceStatus
   }
+  systemStatus?: SystemStatus
+  alerts?: DashboardAlert[]
   aircraft: Aircraft[]
 }
 
@@ -113,15 +144,25 @@ export function useDashboardData(
         throw new Error('Invalid dashboard response')
       }
 
-      setData(json.data)
+      const normalizedAircraft = (json.data.aircraft || []).map(
+        (plane: Aircraft) => ({
+          ...plane,
+          track: plane.track ?? plane.trueTrack ?? null,
+        })
+      )
+
+      setData({
+        ...json.data,
+        aircraft: normalizedAircraft,
+      })
       setLastUpdated(new Date())
     } catch (err) {
-      const error =
+      const fetchError =
         err instanceof Error
           ? err
           : new Error('Failed to fetch dashboard data')
-      setError(error)
-      console.error('[v0] Dashboard fetch error:', error.message)
+      setError(fetchError)
+      console.error('[Dashboard] fetch error:', fetchError.message)
     } finally {
       setIsLoading(false)
     }
@@ -131,14 +172,12 @@ export function useDashboardData(
     await fetchDashboard()
   }, [fetchDashboard])
 
-  // Initial fetch
   useEffect(() => {
     if (enabled) {
       fetchDashboard()
     }
   }, [enabled, fetchDashboard])
 
-  // Setup interval for auto-refresh
   useEffect(() => {
     if (!enabled) {
       return

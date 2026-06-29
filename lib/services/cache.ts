@@ -9,6 +9,8 @@
  * Sprint 5+: Implement with Redis or in-memory cache
  */
 
+import { InMemoryCacheImpl } from './cache/in-memory-cache'
+
 /**
  * Cache entry metadata
  */
@@ -246,52 +248,11 @@ export abstract class BaseCache implements ICache {
   }
 }
 
-/**
- * In-memory cache implementation placeholder
- * Implementation details in Sprint 5+
- */
-export class InMemoryCache extends BaseCache {
-  protected data: Map<string, { value: unknown; expiresAt: number }> = new Map()
-
-  get<T = unknown>(key: string): T | undefined {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  set<T = unknown>(key: string, value: T, ttlSeconds?: number): void {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  delete(key: string): void {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  has(key: string): boolean {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  clear(): void {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  size(): number {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  cleanup(): void {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-
-  getEntry<T = unknown>(key: string): CacheEntry<T> | undefined {
-    throw new Error('InMemoryCache implementation not yet available')
-  }
-}
+export { InMemoryCacheImpl as InMemoryCache } from './cache/in-memory-cache'
 
 /**
  * Factory function to create a cache instance
  */
 export function createCache(options?: CacheOptions): ICache {
-  // For now, throw error indicating implementation is pending
-  throw new Error(
-    'Cache implementation not yet available. Expected in Sprint 5.'
-  )
+  return new InMemoryCacheImpl(options)
 }

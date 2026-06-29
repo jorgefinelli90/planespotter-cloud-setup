@@ -7,133 +7,152 @@
  */
 
 export const appConfig = {
-  // Scheduler Configuration
   scheduler: {
-    // Aircraft update interval in milliseconds
     aircraftUpdateInterval: parseInt(
       process.env.SCHEDULER_AIRCRAFT_INTERVAL || '15000',
       10
     ),
-    // Enable/disable scheduler
     enabled: process.env.SCHEDULER_ENABLED !== 'false',
   },
 
-  // Cache Configuration
   cache: {
-    // Time-to-live for cached data in milliseconds (5 minutes default)
     ttl: parseInt(process.env.CACHE_TTL || '300000', 10),
-    // Maximum number of cache entries to keep
     maxEntries: parseInt(process.env.CACHE_MAX_ENTRIES || '10000', 10),
-    // Enable/disable cache
     enabled: process.env.CACHE_ENABLED !== 'false',
   },
 
-  // HTTP Configuration
   http: {
-    // Request timeout in milliseconds
     timeout: parseInt(process.env.HTTP_TIMEOUT || '10000', 10),
-    // Retry attempts for failed requests
     maxRetries: parseInt(process.env.HTTP_MAX_RETRIES || '2', 10),
   },
 
-  // Logging Configuration
   logging: {
-    // Log level: 'debug', 'info', 'warning', 'error'
     level: process.env.LOG_LEVEL || 'info',
-    // Maximum number of log entries to keep in memory
     maxLogs: parseInt(process.env.LOG_MAX_ENTRIES || '1000', 10),
-    // Enable/disable console output
     console: process.env.LOG_CONSOLE !== 'false',
   },
 
-  // OpenSky Configuration
   opensky: {
-    // OpenSky API URL
     apiUrl: process.env.OPENSKY_API_URL || 'https://opensky-network.org/api',
-    // OpenSky username (from environment)
+    tokenUrl:
+      process.env.OPENSKY_TOKEN_URL ||
+      'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token',
     username: process.env.OPENSKY_USERNAME || '',
-    // OpenSky password (from environment)
     password: process.env.OPENSKY_PASSWORD || '',
+    /** Renew token this many seconds before expiry */
+    tokenRenewalBufferSeconds: parseInt(
+      process.env.OPENSKY_TOKEN_RENEWAL_BUFFER || '60',
+      10
+    ),
   },
 
-  // Dashboard Configuration
   dashboard: {
-    // Maximum number of aircraft to return in response
     maxAircraft: parseInt(process.env.DASHBOARD_MAX_AIRCRAFT || '100', 10),
   },
 
-  // Feature Flags
   features: {
-    // Enable scheduler for background updates
     schedulerEnabled: process.env.FEATURE_SCHEDULER !== 'false',
-    // Enable cache layer
     cacheEnabled: process.env.FEATURE_CACHE !== 'false',
   },
 } as const
 
+export interface ConfigValidationResult {
+  valid: boolean
+  errors: string[]
+  missingEnvVars: string[]
+}
+
 /**
- * Validate configuration at startup
+ * Validate OpenSky credentials required for production runtime
  */
-export function validateConfig(): { valid: boolean; errors: string[] } {
+export function validateOpenSkyConfig(): ConfigValidationResult {
   const errors: string[] = []
+  const missingEnvVars: string[] = []
 
-  // Validate scheduler interval
-  if (appConfig.scheduler.aircraftUpdateInterval < 5000) {
+  if (!appConfig.opensky.username) {
+    missingEnvVars.push('OPENSKY_USERNAME')
     errors.push(
-      'Scheduler aircraft update interval must be at least 5 seconds'
+      'Missing OPENSKY_USERNAME — set your OpenSky API client ID in environment variables'
     )
   }
 
-  // Validate cache TTL
-  if (appConfig.cache.ttl < 1000) {
-    errors.push('Cache TTL must be at least 1 second')
-  }
-
-  // Validate HTTP timeout
-  if (appConfig.http.timeout < 1000) {
-    errors.push('HTTP timeout must be at least 1 second')
-  }
-
-  // Validate OpenSky credentials if scheduler enabled
-  if (
-    appConfig.features.schedulerEnabled &&
-    (!appConfig.opensky.username || !appConfig.opensky.password)
-  ) {
+  if (!appConfig.opensky.password) {
+    missingEnvVars.push('OPENSKY_PASSWORD')
     errors.push(
-      'OpenSky credentials required when scheduler is enabled. Set OPENSKY_USERNAME and OPENSKY_PASSWORD'
+      'Missing OPENSKY_PASSWORD — set your OpenSky API client secret in environment variables'
     )
+  }
+
+  if (!appConfig.opensky.apiUrl) {
+    missingEnvVars.push('OPENSKY_API_URL')
+    errors.push('Missing OPENSKY_API_URL — OpenSky API base URL is required')
   }
 
   return {
     valid: errors.length === 0,
     errors,
+    missingEnvVars,
   }
 }
 
 /**
- * Get human-readable configuration summary
+ * Validate general application configuration at startup
  */
+export function validateConfig(): ConfigValidationResult {
+  const errors: string[] = []
+  const missingEnvVars: string[] = []
+
+  if (appConfig.scheduler.aircraftUpdateInterval < 5000) {
+    errors.push(
+      'Scheduler aircraft update interval must be at least 5 seconds (SCHEDULER_AIRCRAFT_INTERVAL)'
+    )
+  }
+
+  if (appConfig.cache.ttl < 1000) {
+    errors.push('Cache TTL must be at least 1 second (CACHE_TTL)')
+  }
+
+  if (appConfig.http.timeout < 1000) {
+    errors.push('HTTP timeout must be at least 1 second (HTTP_TIMEOUT)')
+  }
+
+  const openskyValidation = validateOpenSkyConfig()
+  errors.push(...openskyValidation.errors)
+  missingEnvVars.push(...openskyValidation.missingEnvVars)
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    missingEnvVars,
+  }
+}
+
 export function getConfigSummary(): string {
   return `
     === PlaneSpotter Cloud Configuration ===
     Scheduler:
       - Aircraft Update Interval: ${appConfig.scheduler.aircraftUpdateInterval}ms
       - Enabled: ${appConfig.scheduler.enabled}
-    
+
     Cache:
       - TTL: ${appConfig.cache.ttl}ms
       - Max Entries: ${appConfig.cache.maxEntries}
       - Enabled: ${appConfig.cache.enabled}
-    
+
     HTTP:
       - Timeout: ${appConfig.http.timeout}ms
       - Max Retries: ${appConfig.http.maxRetries}
-    
+
+    OpenSky:
+      - API URL: ${appConfig.opensky.apiUrl}
+      - Username configured: ${!!appConfig.opensky.username}
+      - Password configured: ${!!appConfig.opensky.password}
+
     Logging:
       - Level: ${appConfig.logging.level}
       - Max Logs: ${appConfig.logging.maxLogs}
       - Console: ${appConfig.logging.console}
-    
+
     Dashboard:
       - Max Aircraft: ${appConfig.dashboard.maxAircraft}
     ===================================

@@ -3,28 +3,22 @@
  *
  * Implements the BaseService contract for aircraft data management.
  * Consumes an IAircraftProvider for decoupled data access.
+ * Does not know about OpenSky — only depends on IAircraftProvider.
  */
 
 import { BaseService } from '../base-service'
 import type { ServiceExecutionResult } from '../base-service'
 import { getLogger } from '@/lib/logger/logger'
 import type { IAircraftProvider } from './provider'
-import { createStubProvider } from './provider'
-import { createOpenSkyProvider } from './opensky'
+import { createAircraftProvider } from './create-provider'
 import type { AircraftData, AircraftServiceState, AircraftQueryOptions } from './types'
 
-/**
- * Aircraft Service
- *
- * Manages aircraft data acquisition and caching.
- * Completely decoupled from data source via IAircraftProvider interface.
- */
 export class AircraftService extends BaseService {
   readonly id = 'aircraft'
   readonly name = 'Aircraft Service'
   readonly description = 'Fetches and manages aircraft data from configured provider'
   enabled = true
-  refreshInterval = 30 // 30 seconds
+  refreshInterval = 30
 
   private provider: IAircraftProvider
   private logger = getLogger('AircraftService')
@@ -33,27 +27,26 @@ export class AircraftService extends BaseService {
   private lastError: string | null = null
   private executionCount = 0
 
+  /**
+   * @param provider Optional provider injection for unit tests only
+   */
   constructor(provider?: IAircraftProvider) {
     super()
-    // Use OpenSky by default, fall back to stub if not configured
-    if (provider) {
-      this.provider = provider
-    } else if (process.env.OPENSKY_USERNAME && process.env.OPENSKY_PASSWORD) {
-      this.provider = createOpenSkyProvider()
-    } else {
-      this.provider = createStubProvider()
-    }
-    this.logger.info('Aircraft service created', { provider: this.provider.name })
+    this.provider = provider ?? createAircraftProvider()
+    this.logger.info('Aircraft service created', {
+      provider: this.provider.name,
+    })
   }
 
-  /**
-   * Initialize the service and provider
-   */
   async initialize(): Promise<void> {
     try {
-      this.logger.debug('Initializing aircraft service')
+      this.logger.debug('Initializing aircraft service', {
+        provider: this.provider.name,
+      })
       await this.provider.initialize()
-      this.logger.info('Aircraft service initialized successfully')
+      this.logger.info('Aircraft service initialized successfully', {
+        provider: this.provider.name,
+      })
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error)
       this.logger.error('Failed to initialize aircraft service', error as Error)
@@ -61,9 +54,6 @@ export class AircraftService extends BaseService {
     }
   }
 
-  /**
-   * Execute service - fetch aircraft data
-   */
   async execute(): Promise<ServiceExecutionResult> {
     const startTime = Date.now()
 
@@ -71,8 +61,26 @@ export class AircraftService extends BaseService {
       this.logger.debug('Executing aircraft service')
       this.executionCount++
 
-      // Fetch data from provider
       const response = await this.provider.fetchAircraft()
+      const providerStatus = this.provider.getStatus()
+
+      if (providerStatus.error) {
+        this.lastError = providerStatus.error
+        const duration = Date.now() - startTime
+
+        this.logger.error('Failed to fetch aircraft data', {
+          error: providerStatus.error,
+          duration,
+        })
+
+        return {
+          status: 'error',
+          lastRun: new Date().toISOString(),
+          duration,
+          itemsProcessed: 0,
+          error: providerStatus.error,
+        }
+      }
 
       this.aircraftData = response.aircraft
       this.lastUpdate = new Date().toISOString()
@@ -81,6 +89,7 @@ export class AircraftService extends BaseService {
       const duration = Date.now() - startTime
 
       this.logger.info('Aircraft data fetched successfully', {
+        provider: this.provider.name,
         count: response.count,
         duration,
       })
@@ -107,9 +116,6 @@ export class AircraftService extends BaseService {
     }
   }
 
-  /**
-   * Get current service status
-   */
   getStatus(): ServiceExecutionResult {
     return {
       status: this.isHealthy() ? 'success' : 'error',
@@ -120,9 +126,6 @@ export class AircraftService extends BaseService {
     }
   }
 
-  /**
-   * Cleanup service resources
-   */
   async cleanup(): Promise<void> {
     try {
       this.logger.debug('Cleaning up aircraft service')
@@ -134,27 +137,16 @@ export class AircraftService extends BaseService {
     }
   }
 
-  /**
-   * Check if service is healthy
-   */
   isHealthy(): boolean {
     const providerStatus = this.provider.getStatus()
     return providerStatus.isConnected && this.lastError === null
   }
 
-  /**
-   * Get aircraft data
-   */
   getAircraft(): AircraftData[] {
     return [...this.aircraftData]
   }
 
-  /**
-   * Get service state
-   */
   getState(): AircraftServiceState {
-    const providerStatus = this.provider.getStatus()
-
     return {
       lastUpdate: this.lastUpdate,
       aircraftCount: this.aircraftData.length,
@@ -164,9 +156,6 @@ export class AircraftService extends BaseService {
     }
   }
 
-  /**
-   * Get statistics
-   */
   getStats() {
     return {
       executionCount: this.executionCount,
@@ -178,14 +167,9 @@ export class AircraftService extends BaseService {
   }
 }
 
-/**
- * Create an AircraftService instance
- */
 export function createAircraftService(provider?: IAircraftProvider): AircraftService {
   return new AircraftService(provider)
 }
 
-// Re-export types and interfaces
 export type { IAircraftProvider, AircraftData, AircraftServiceState, AircraftQueryOptions }
-export { StubAircraftProvider, createStubProvider } from './provider'
 export { OpenSkyProvider, createOpenSkyProvider } from './opensky'

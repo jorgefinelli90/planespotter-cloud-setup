@@ -188,10 +188,9 @@ export interface SchedulerOptions {
 
 /**
  * Factory function to create a scheduler
- * Implementation provided in Sprint 5+
  */
 export function createScheduler(options?: SchedulerOptions): IScheduler {
   throw new Error(
-    'Scheduler implementation not yet available. Expected in Sprint 5.'
+    'Use createIntervalScheduler via bootstrap instead of createScheduler directly'
   )
 }

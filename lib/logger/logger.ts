@@ -5,6 +5,8 @@
  * Supports multiple log levels and contexts.
  */
 
+import { appConfig } from '@/lib/config/app-config'
+
 export type LogLevel = 'debug' | 'info' | 'warning' | 'error'
 
 export interface ILogger {
@@ -37,9 +39,18 @@ export class Logger implements ILogger {
   private context: string
   private entries: LogEntry[] = []
   private maxEntries: number = 1000
+  private consoleEnabled: boolean = true
 
   constructor(context: string = 'App') {
     this.context = context
+  }
+
+  setMaxEntries(maxEntries: number): void {
+    this.maxEntries = maxEntries
+  }
+
+  setConsoleEnabled(enabled: boolean): void {
+    this.consoleEnabled = enabled
   }
 
   /**
@@ -146,6 +157,10 @@ export class Logger implements ILogger {
     }
 
     // Console output based on level
+    if (!this.consoleEnabled) {
+      return
+    }
+
     if (level === 'error') {
       console.error(prefix, message, context || '')
     } else if (level === 'warning') {
@@ -161,12 +176,33 @@ export class Logger implements ILogger {
 /**
  * Global logger instance
  */
-let globalLogger: ILogger | null = null
+let globalLogger: Logger | null = null
+let loggerConfigured = false
+
+/**
+ * Apply application configuration to the global logger
+ */
+export function configureLogger(): void {
+  if (loggerConfigured) {
+    return
+  }
+
+  const logger = getLogger('App')
+  const level = appConfig.logging.level
+
+  if (['debug', 'info', 'warning', 'error'].includes(level)) {
+    logger.setLevel(level as LogLevel)
+  }
+
+  logger.setMaxEntries(appConfig.logging.maxLogs)
+  logger.setConsoleEnabled(appConfig.logging.console)
+  loggerConfigured = true
+}
 
 /**
  * Get or create global logger
  */
-export function getLogger(context: string = 'App'): ILogger {
+export function getLogger(context: string = 'App'): Logger {
   if (!globalLogger) {
     globalLogger = new Logger(context)
   }
@@ -177,7 +213,7 @@ export function getLogger(context: string = 'App'): ILogger {
  * Set global logger instance
  */
 export function setGlobalLogger(logger: ILogger): void {
-  globalLogger = logger
+  globalLogger = logger as Logger
 }
 
 /**

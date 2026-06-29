@@ -1,65 +1,70 @@
 /**
- * DashboardBuilder - Orchestrates dashboard assembly from services
+ * DashboardBuilder - Orchestrates dashboard assembly from cache
  *
- * Responsible for:
- * - Collecting data from multiple services
- * - Aggregating into dashboard structure
- * - Handling partial failures gracefully
- * - Caching results
- *
- * Sprint 4: Returns empty structure from Sprint 2
- * Sprint 5+: Integrates with actual services (OpenSky, Weather, News, etc)
+ * Reads exclusively from cache — never calls external APIs or executes services.
  */
 
 import type { Dashboard } from '@/types'
-import type { ServiceManager } from './service-manager'
+import type { AircraftData } from './aircraft/types'
+import { getSystemStatusFromCache } from './aircraft-updater'
+import { CACHE_KEYS } from './cache-keys'
+import type { AircraftCachePayload, SystemStatusInfo } from './cache-types'
 import type { ICache } from './cache'
+import type { ServiceManager } from './service-manager'
+import type { IntervalScheduler } from './interval-scheduler'
+import { appConfig } from '@/lib/config/app-config'
 import { getLogger } from '@/lib/logger/logger'
 
-/**
- * Dashboard builder configuration
- */
 export interface DashboardBuilderConfig {
-  /**
-   * Cache instance (optional)
-   */
   cache?: ICache
-
-  /**
-   * Cache TTL in seconds
-   */
-  cacheTtl?: number
-
-  /**
-   * Service timeout in milliseconds
-   */
-  serviceTimeout?: number
-
-  /**
-   * Include service metadata in response
-   */
   includeMetadata?: boolean
 }
 
-/**
- * Dashboard builder result
- */
-export interface DashboardBuildResult {
+export interface DashboardApiData {
   dashboard: Dashboard
-  serviceResults: Map<string, unknown>
-  errors: Map<string, Error>
-  buildTime: number
+  services: {
+    aircraft: {
+      status: 'healthy' | 'degraded' | 'error'
+      name?: string
+      provider?: string
+      aircraftCount?: number
+      lastUpdate?: string | null
+      error?: string
+    }
+    scheduler: {
+      status: 'running' | 'stopped'
+      intervalMs: number
+      lastExecution?: string | null
+      nextExecution?: string | null
+    }
+    cache: {
+      status: 'enabled' | 'disabled'
+      ttlMs: number
+      entries: number
+      lastUpdate?: string | null
+      cacheAgeMs?: number | null
+    }
+  }
+  systemStatus: SystemStatusInfo
+  aircraft: Array<AircraftData & { track: number | null }>
+  alerts: Array<{
+    id: string
+    type: 'warning' | 'error'
+    title: string
+    message: string
+  }>
 }
 
-/**
- * DashboardBuilder implementation
- */
+export interface DashboardBuildResult {
+  data: DashboardApiData
+  buildTime: number
+  fromCache: boolean
+}
+
 export class DashboardBuilder {
   private serviceManager: ServiceManager
   private cache?: ICache
-  private cacheTtl: number = 300 // 5 minutes default
-  private serviceTimeout: number = 5000 // 5 seconds default
-  private includeMetadata: boolean = false
+  private includeMetadata: boolean = true
   private logger = getLogger('DashboardBuilder')
 
   constructor(
@@ -70,97 +75,159 @@ export class DashboardBuilder {
     if (config?.cache) {
       this.cache = config.cache
     }
-    if (config?.cacheTtl !== undefined) {
-      this.cacheTtl = config.cacheTtl
-    }
-    if (config?.serviceTimeout !== undefined) {
-      this.serviceTimeout = config.serviceTimeout
-    }
     if (config?.includeMetadata !== undefined) {
       this.includeMetadata = config.includeMetadata
     }
   }
 
-  /**
-   * Build complete dashboard for a user
-   *
-   * Sprint 5+: Integrates with actual services
-   *
-   * @param userId - User ID
-   * @returns Dashboard build result
-   */
-  async build(userId: string): Promise<DashboardBuildResult> {
+  build(
+    userId: string,
+    scheduler?: IntervalScheduler
+  ): DashboardBuildResult {
     const startTime = Date.now()
-    const cacheKey = `dashboard:${userId}`
 
-    // Check cache first
-    if (this.cache?.has(cacheKey)) {
-      const cached = this.cache.get<DashboardBuildResult>(cacheKey)
-      if (cached) {
-        this.logger.debug('Dashboard cache hit', { userId })
-        return cached
-      }
-    }
+    const payload = this.cache?.get<AircraftCachePayload>(CACHE_KEYS.AIRCRAFT)
+    const aircraft = payload?.aircraft ?? []
+    const aircraftCount = payload?.aircraftCount ?? aircraft.length
 
-    this.logger.debug('Building dashboard from services', { userId })
+    const scheduledTask = scheduler?.getScheduledTask('aircraft')
+    const systemStatus = this.cache
+      ? getSystemStatusFromCache(
+          this.cache,
+          scheduler?.isRunning() ?? false,
+          scheduledTask?.nextExecution ?? null
+        )
+      : {
+          lastUpdate: null,
+          cacheAgeMs: null,
+          cacheTtlMs: appConfig.cache.ttl,
+          nextUpdate: null,
+          aircraftCountInCache: 0,
+          schedulerRunning: false,
+          schedulerIntervalMs: appConfig.scheduler.aircraftUpdateInterval,
+          lastUpdateError: null,
+          provider: 'OpenSky',
+          lastSyncDurationMs: null,
+        }
 
-    const serviceResults = new Map<string, unknown>()
-    const errors = new Map<string, Error>()
+    const aircraftStatus = this.resolveAircraftStatus(payload)
+    const alerts = this.buildAlerts(payload, aircraftCount)
 
-    // Execute all enabled services in parallel
-    const enabledServices = this.serviceManager.getEnabledServices()
-
-    for (const service of enabledServices) {
-      try {
-        this.logger.debug('Executing service', { serviceId: service.id })
-        const result = await this.executeServiceWithTimeout(service)
-        serviceResults.set(service.id, result)
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error))
-        errors.set(service.id, err)
-        this.logger.warning('Service execution failed', {
-          serviceId: service.id,
-          error: err.message,
-        })
-      }
-    }
-
-    // Build dashboard structure
-    const dashboard = this.buildEmptyDashboard(userId)
+    const dashboard = this.buildDashboard(userId, aircraftCount, payload)
+    const normalizedAircraft = aircraft
+      .slice(0, appConfig.dashboard.maxAircraft)
+      .map((plane) => ({
+        ...plane,
+        track: plane.trueTrack,
+      }))
 
     const buildTime = Date.now() - startTime
-    const result: DashboardBuildResult = {
-      dashboard,
-      serviceResults,
-      errors,
-      buildTime,
-    }
 
-    this.logger.info('Dashboard built successfully', {
+    this.logger.debug('Dashboard built from cache', {
       userId,
+      aircraftCount,
       buildTime,
-      serviceCount: enabledServices.length,
-      errorCount: errors.size,
+      hasCache: !!payload,
     })
 
-    // Cache the result
-    if (this.cache) {
-      this.cache.set(cacheKey, result, this.cacheTtl)
+    return {
+      fromCache: !!payload,
+      buildTime,
+      data: {
+        dashboard,
+        services: {
+          aircraft: {
+            status: aircraftStatus,
+            name: payload?.provider ?? 'OpenSky',
+            provider: payload?.provider ?? 'OpenSky',
+            aircraftCount,
+            lastUpdate: payload?.lastUpdate ?? null,
+            error: payload?.lastError ?? undefined,
+          },
+          scheduler: {
+            status: scheduler?.isRunning() ? 'running' : 'stopped',
+            intervalMs: appConfig.scheduler.aircraftUpdateInterval,
+            lastExecution: scheduledTask?.lastExecution ?? null,
+            nextExecution: scheduledTask?.nextExecution ?? null,
+          },
+          cache: {
+            status: appConfig.features.cacheEnabled ? 'enabled' : 'disabled',
+            ttlMs: appConfig.cache.ttl,
+            entries: this.cache?.size() ?? 0,
+            lastUpdate: systemStatus.lastUpdate,
+            cacheAgeMs: systemStatus.cacheAgeMs,
+          },
+        },
+        systemStatus,
+        aircraft: normalizedAircraft,
+        alerts,
+      },
     }
-
-    return result
   }
 
-  /**
-   * Build empty dashboard structure (Sprint 4)
-   * Matches the structure defined in Sprint 2
-   */
-  private buildEmptyDashboard(userId: string): Dashboard {
+  invalidateCache(): void {
+    this.cache?.delete(CACHE_KEYS.AIRCRAFT)
+    this.logger.info('Aircraft cache invalidated manually')
+  }
+
+  private resolveAircraftStatus(
+    payload: AircraftCachePayload | undefined
+  ): 'healthy' | 'degraded' | 'error' {
+    if (!payload) {
+      return 'error'
+    }
+
+    if (payload.lastError) {
+      return payload.aircraftCount > 0 ? 'degraded' : 'error'
+    }
+
+    return 'healthy'
+  }
+
+  private buildAlerts(
+    payload: AircraftCachePayload | undefined,
+    aircraftCount: number
+  ): DashboardApiData['alerts'] {
+    const alerts: DashboardApiData['alerts'] = []
+
+    if (!payload) {
+      alerts.push({
+        id: 'cache-empty',
+        type: 'warning',
+        title: 'Cache vacía',
+        message:
+          'Esperando la primera actualización del scheduler. Los datos aparecerán en breve.',
+      })
+      return alerts
+    }
+
+    if (payload.lastError) {
+      alerts.push({
+        id: 'aircraft-update-error',
+        type: aircraftCount > 0 ? 'warning' : 'error',
+        title: 'Error al actualizar OpenSky',
+        message: payload.lastError,
+      })
+    }
+
+    return alerts
+  }
+
+  private buildDashboard(
+    userId: string,
+    aircraftCount: number,
+    payload: AircraftCachePayload | undefined
+  ): Dashboard {
+    const now = new Date().toISOString()
+    const description = payload
+      ? `${aircraftCount} aircraft from ${payload.provider} — last update ${formatIsoTime(payload.lastUpdate)}`
+      : 'Waiting for cached aircraft data from OpenSky...'
+
     return {
       id: '',
       userId,
       name: 'Default Dashboard',
-      description: '',
+      description,
       visibility: 'private',
       type: 'overview',
       isDefault: true,
@@ -169,68 +236,50 @@ export class DashboardBuilder {
         name: 'Default Layout',
         dashboardId: '',
         columns: 4,
-        widgets: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        widgets: payload
+          ? [
+              {
+                id: 'aircraft-list',
+                type: 'aircraft-tracker' as const,
+                title: 'Aircraft Detection',
+                description: `${aircraftCount} aircraft from ${payload.provider}`,
+                position: { x: 0, y: 0, width: 4, height: 2 },
+                config: {
+                  refreshInterval: Math.floor(
+                    appConfig.scheduler.aircraftUpdateInterval / 1000
+                  ),
+                  showMap: true,
+                  limit: appConfig.dashboard.maxAircraft,
+                },
+              },
+            ]
+          : [],
+        createdAt: now,
+        updatedAt: now,
       },
       settings: {
         realtimeUpdates: true,
-        updateFrequency: 30,
+        updateFrequency: Math.floor(
+          appConfig.scheduler.aircraftUpdateInterval / 1000
+        ),
         enableNotifications: true,
         darkMode: true,
         density: 'comfortable',
       },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     }
-  }
-
-  /**
-   * Execute service with timeout
-   * Used in Sprint 5+ when integrating actual services
-   */
-  private async executeServiceWithTimeout(service: any): Promise<unknown> {
-    return Promise.race([
-      service.execute(),
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`Service "${service.id}" timeout`)),
-          this.serviceTimeout
-        )
-      ),
-    ])
-  }
-
-  /**
-   * Invalidate dashboard cache for a user
-   */
-  invalidateCache(userId: string): void {
-    if (this.cache) {
-      this.cache.delete(`dashboard:${userId}`)
-    }
-  }
-
-  /**
-   * Invalidate all dashboard cache
-   */
-  invalidateAllCache(): void {
-    if (this.cache) {
-      // Note: In real implementation, might need pattern-based deletion
-      this.cache.clear()
-    }
-  }
-
-  /**
-   * Get cache stats
-   */
-  getCacheStats() {
-    return this.cache?.getStats()
   }
 }
 
-/**
- * Factory function to create a dashboard builder
- */
+function formatIsoTime(isoString: string): string {
+  try {
+    return new Date(isoString).toLocaleTimeString()
+  } catch {
+    return isoString
+  }
+}
+
 export function createDashboardBuilder(
   serviceManager: ServiceManager,
   config?: DashboardBuilderConfig
