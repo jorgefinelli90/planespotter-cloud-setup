@@ -76,11 +76,17 @@ export default function DashboardPage() {
     return `${Math.round(ms / 1000)}s`
   }
 
-  const aircraftCount =
+  const providerCount =
+    data?.radar?.aircraftFromProvider ??
     data?.systemStatus?.aircraftCountInCache ??
     data?.services?.aircraft?.aircraftCount ??
-    data?.aircraft?.length ??
     0
+
+  const aircraftCount =
+    data?.radar?.aircraftInRadius ?? data?.aircraft?.length ?? 0
+
+  const radarLocation = data?.radar?.location
+  const radiusKm = radarLocation?.radiusKm ?? 0
 
   const providerName =
     data?.services?.aircraft?.provider ??
@@ -123,6 +129,41 @@ export default function DashboardPage() {
 
         {data && (
           <>
+            {radarLocation && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                  <div>
+                    <p className="text-xs text-zinc-500">Radar Location</p>
+                    <p className="mt-1 text-sm font-medium text-zinc-200">
+                      {radarLocation.latitude.toFixed(4)},{' '}
+                      {radarLocation.longitude.toFixed(4)}
+                    </p>
+                    <p className="mt-0.5 text-xs uppercase text-zinc-500">
+                      Source: {radarLocation.source}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Radius</p>
+                    <p className="mt-1 text-sm font-medium text-zinc-200">
+                      {radiusKm} km
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Aircraft in Radius</p>
+                    <p className="mt-1 text-sm font-medium text-blue-400">
+                      {aircraftCount}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">From Provider</p>
+                    <p className="mt-1 text-sm font-medium text-zinc-200">
+                      {providerCount}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
               {data.systemStatus && (
                 <SystemStatusCard status={data.systemStatus} />
@@ -149,12 +190,12 @@ export default function DashboardPage() {
                 status={aircraftCount > 0 ? 'online' : 'degraded'}
                 details={[
                   {
-                    label: 'Total Aircraft',
-                    value: aircraftCount.toString(),
+                    label: 'In Radius',
+                    value: `${aircraftCount} aircraft`,
                   },
                   {
-                    label: 'Provider',
-                    value: providerName,
+                    label: 'From Provider',
+                    value: `${providerCount}`,
                   },
                   {
                     label: 'Last Update',
@@ -231,7 +272,7 @@ export default function DashboardPage() {
                   </h2>
                   <p className="mt-1 text-sm text-zinc-400">
                     Showing {Math.min(25, aircraftCount)} of {aircraftCount}{' '}
-                    aircraft
+                    aircraft within {radiusKm} km, sorted by proximity
                   </p>
                 </div>
               </div>

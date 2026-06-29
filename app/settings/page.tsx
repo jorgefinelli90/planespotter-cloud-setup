@@ -1,4 +1,5 @@
 import { AppLayout } from '@/components/layout/app-layout'
+import { RadarLocationSettings } from '@/components/settings/radar-location-settings'
 
 export const metadata = {
   title: 'Settings - PlaneSpotter Cloud',
@@ -16,11 +17,7 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        <div className="rounded-lg border border-border bg-card p-8">
-          <p className="text-sm text-muted-foreground">
-            Settings interface will be implemented in future sprints.
-          </p>
-        </div>
+        <RadarLocationSettings />
       </div>
     </AppLayout>
   )

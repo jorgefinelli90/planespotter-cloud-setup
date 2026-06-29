@@ -4,20 +4,25 @@
  * Reads exclusively from cache — never calls external APIs or executes services.
  */
 
-import type { Dashboard } from '@/types'
-import type { AircraftData } from './aircraft/types'
+import type { Dashboard, DeviceLocation } from '@/types'
 import { getSystemStatusFromCache } from './aircraft-updater'
 import { CACHE_KEYS } from './cache-keys'
 import type { AircraftCachePayload, SystemStatusInfo } from './cache-types'
 import type { ICache } from './cache'
 import type { ServiceManager } from './service-manager'
 import type { IntervalScheduler } from './interval-scheduler'
+import type { LocationService } from './location/location-service'
+import {
+  filterAircraftByRadius,
+  type FilteredAircraft,
+} from './aircraft/aircraft-filter'
 import { appConfig } from '@/lib/config/app-config'
 import { getLogger } from '@/lib/logger/logger'
 
 export interface DashboardBuilderConfig {
   cache?: ICache
   includeMetadata?: boolean
+  locationService?: LocationService
 }
 
 export interface DashboardApiData {
@@ -46,7 +51,12 @@ export interface DashboardApiData {
     }
   }
   systemStatus: SystemStatusInfo
-  aircraft: Array<AircraftData & { track: number | null }>
+  radar: {
+    location: DeviceLocation
+    aircraftInRadius: number
+    aircraftFromProvider: number
+  }
+  aircraft: Array<FilteredAircraft & { track: number | null }>
   alerts: Array<{
     id: string
     type: 'warning' | 'error'
@@ -65,6 +75,7 @@ export class DashboardBuilder {
   private serviceManager: ServiceManager
   private cache?: ICache
   private includeMetadata: boolean = true
+  private locationService?: LocationService
   private logger = getLogger('DashboardBuilder')
 
   constructor(
@@ -78,6 +89,9 @@ export class DashboardBuilder {
     if (config?.includeMetadata !== undefined) {
       this.includeMetadata = config.includeMetadata
     }
+    if (config?.locationService) {
+      this.locationService = config.locationService
+    }
   }
 
   build(
@@ -87,8 +101,30 @@ export class DashboardBuilder {
     const startTime = Date.now()
 
     const payload = this.cache?.get<AircraftCachePayload>(CACHE_KEYS.AIRCRAFT)
-    const aircraft = payload?.aircraft ?? []
-    const aircraftCount = payload?.aircraftCount ?? aircraft.length
+    const rawAircraft = payload?.aircraft ?? []
+    const providerCount = payload?.aircraftCount ?? rawAircraft.length
+
+    // Resolve the current radar location and filter aircraft as an
+    // independent stage. AircraftService is never touched here.
+    const radarLocation: DeviceLocation = this.locationService?.getLocation() ?? {
+      latitude: 0,
+      longitude: 0,
+      radiusKm: appConfig.dashboard.maxAircraft,
+      source: 'ip',
+    }
+
+    const filteredAircraft = filterAircraftByRadius(rawAircraft, radarLocation)
+    const aircraftCount = filteredAircraft.length
+
+    this.logger.info('Aircraft filtered by radar radius', {
+      location: {
+        latitude: radarLocation.latitude,
+        longitude: radarLocation.longitude,
+      },
+      radiusKm: radarLocation.radiusKm,
+      openSkyCount: providerCount,
+      filteredCount: aircraftCount,
+    })
 
     const scheduledTask = scheduler?.getScheduledTask('aircraft')
     const systemStatus = this.cache
@@ -111,10 +147,10 @@ export class DashboardBuilder {
         }
 
     const aircraftStatus = this.resolveAircraftStatus(payload)
-    const alerts = this.buildAlerts(payload, aircraftCount)
+    const alerts = this.buildAlerts(payload, providerCount)
 
-    const dashboard = this.buildDashboard(userId, aircraftCount, payload)
-    const normalizedAircraft = aircraft
+    const dashboard = this.buildDashboard(userId, providerCount, payload)
+    const normalizedAircraft = filteredAircraft
       .slice(0, appConfig.dashboard.maxAircraft)
       .map((plane) => ({
         ...plane,
@@ -126,6 +162,7 @@ export class DashboardBuilder {
     this.logger.debug('Dashboard built from cache', {
       userId,
       aircraftCount,
+      providerCount,
       buildTime,
       hasCache: !!payload,
     })
@@ -140,7 +177,7 @@ export class DashboardBuilder {
             status: aircraftStatus,
             name: payload?.provider ?? 'OpenSky',
             provider: payload?.provider ?? 'OpenSky',
-            aircraftCount,
+            aircraftCount: providerCount,
             lastUpdate: payload?.lastUpdate ?? null,
             error: payload?.lastError ?? undefined,
           },
@@ -159,6 +196,11 @@ export class DashboardBuilder {
           },
         },
         systemStatus,
+        radar: {
+          location: radarLocation,
+          aircraftInRadius: aircraftCount,
+          aircraftFromProvider: providerCount,
+        },
         aircraft: normalizedAircraft,
         alerts,
       },

@@ -96,6 +96,16 @@ export async function GET() {
             provider: 'OpenSky',
             lastSyncDurationMs: null,
           },
+          radar: {
+            location: {
+              latitude: 0,
+              longitude: 0,
+              radiusKm: 200,
+              source: 'ip',
+            },
+            aircraftInRadius: 0,
+            aircraftFromProvider: 0,
+          },
           aircraft: [],
           alerts: [
             {

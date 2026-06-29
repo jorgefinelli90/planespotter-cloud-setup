@@ -2,6 +2,16 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 
+export type CardinalDirection =
+  | 'N'
+  | 'NE'
+  | 'E'
+  | 'SE'
+  | 'S'
+  | 'SW'
+  | 'W'
+  | 'NW'
+
 export interface Aircraft {
   id: string
   icao24: string
@@ -16,6 +26,24 @@ export interface Aircraft {
   onGround: boolean
   squawk: string | null
   timestamp: number
+  /** Distance from the radar in km (computed server-side via Haversine) */
+  distanceKm?: number
+  /** Bearing from the radar in degrees */
+  bearing?: number
+  /** Cardinal relative direction derived from bearing */
+  relativeDirection?: CardinalDirection
+}
+
+export interface RadarInfo {
+  location: {
+    latitude: number
+    longitude: number
+    altitude?: number
+    radiusKm: number
+    source: 'manual' | 'ip' | 'gps'
+  }
+  aircraftInRadius: number
+  aircraftFromProvider: number
 }
 
 export interface ServiceStatus {
@@ -99,6 +127,7 @@ export interface DashboardData {
     cache?: ServiceStatus
   }
   systemStatus?: SystemStatus
+  radar?: RadarInfo
   alerts?: DashboardAlert[]
   aircraft: Aircraft[]
 }

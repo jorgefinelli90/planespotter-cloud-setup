@@ -29,6 +29,9 @@ export type {
   DeviceGroup,
 } from './device'
 
+// Device location types
+export type { DeviceLocation, LocationSource } from './device-location'
+
 // Firmware types
 export type {
   FirmwareRelease,

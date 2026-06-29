@@ -10,6 +10,9 @@ interface Aircraft {
   track: number | null
   latitude: number | null
   longitude: number | null
+  distanceKm?: number
+  bearing?: number
+  relativeDirection?: string
 }
 
 interface AircraftTableProps {
@@ -17,33 +20,10 @@ interface AircraftTableProps {
   isLoading?: boolean
 }
 
-function calculateDistance(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371 // Earth radius in km
-  const dLat = ((lat2 - lat1) * Math.PI) / 180
-  const dLon = ((lon2 - lon1) * Math.PI) / 180
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2)
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  return R * c
-}
-
 export function AircraftTable({
   aircraft,
   isLoading,
 }: AircraftTableProps) {
-  // Reference point for distance calculation (New York City as default)
-  const refLat = 40.7128
-  const refLon = -74.006
-
   if (isLoading) {
     return (
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-6">
@@ -79,6 +59,9 @@ export function AircraftTable({
               <th className="px-4 py-3 text-right text-xs font-medium text-zinc-400">
                 Distance
               </th>
+              <th className="px-4 py-3 text-center text-xs font-medium text-zinc-400">
+                Direction
+              </th>
               <th className="px-4 py-3 text-right text-xs font-medium text-zinc-400">
                 Altitude
               </th>
@@ -92,10 +75,8 @@ export function AircraftTable({
           </thead>
           <tbody>
             {aircraft.slice(0, 25).map((plane) => {
-              const lat = plane.latitude ?? 0
-              const lon = plane.longitude ?? 0
-              const distance = calculateDistance(refLat, refLon, lat, lon)
-              const heading = Math.round(plane.track ?? 0)
+              const distance = plane.distanceKm ?? null
+              const heading = Math.round(plane.track ?? plane.bearing ?? 0)
               const speed = Math.round((plane.groundSpeed ?? 0) * 1.94384)
               const altitude = plane.altitude ?? 0
 
@@ -114,7 +95,16 @@ export function AircraftTable({
                     )}
                   </td>
                   <td className="px-4 py-3 text-right text-sm text-zinc-300">
-                    {distance.toFixed(1)} km
+                    {distance !== null ? `${distance.toFixed(1)} km` : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-center text-sm">
+                    {plane.relativeDirection ? (
+                      <span className="inline-flex min-w-[2.5rem] justify-center rounded-md bg-zinc-800 px-2 py-0.5 text-xs font-semibold text-zinc-200">
+                        {plane.relativeDirection}
+                      </span>
+                    ) : (
+                      <span className="text-zinc-500">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right text-sm text-zinc-300">
                     {(altitude / 1000).toFixed(2)} km

@@ -20,6 +20,10 @@ import {
   type IntervalScheduler,
 } from './interval-scheduler'
 import { createServiceManager, type ServiceManager } from './service-manager'
+import {
+  ensureLocationInitialized,
+  type LocationService,
+} from './location/location-service'
 
 const logger = getLogger('Bootstrap')
 
@@ -29,6 +33,7 @@ export interface AppRuntime {
   scheduler: IntervalScheduler
   dashboardBuilder: DashboardBuilder
   aircraftService: AircraftService
+  locationService: LocationService
 }
 
 declare global {
@@ -64,6 +69,19 @@ async function createRuntime(): Promise<AppRuntime> {
   const cache = getCacheInstance()
   const aircraftService = createAircraftService()
 
+  // Initialize radar location before building the dashboard so filtering
+  // has a valid location from the very first request. On first ever startup
+  // this performs a one-time IP geolocation lookup and persists the result.
+  // Uses the shared singleton so the settings API mutates the same instance.
+  const locationService = await ensureLocationInitialized()
+  const initialLocation = locationService.getLocation()
+  logger.info('Radar location ready', {
+    latitude: initialLocation.latitude,
+    longitude: initialLocation.longitude,
+    radiusKm: initialLocation.radiusKm,
+    source: initialLocation.source,
+  })
+
   aircraftService.refreshInterval = Math.max(
     1,
     Math.floor(appConfig.scheduler.aircraftUpdateInterval / 1000)
@@ -94,6 +112,7 @@ async function createRuntime(): Promise<AppRuntime> {
   const dashboardBuilder = createDashboardBuilder(serviceManager, {
     cache,
     includeMetadata: true,
+    locationService,
   })
 
   if (appConfig.features.schedulerEnabled && appConfig.scheduler.enabled) {
@@ -113,6 +132,7 @@ async function createRuntime(): Promise<AppRuntime> {
     scheduler,
     dashboardBuilder,
     aircraftService,
+    locationService,
   }
 }
 
